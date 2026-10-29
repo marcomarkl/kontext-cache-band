@@ -117,27 +117,6 @@ function svgBar(
   )
 }
 
-// Kleiner Ring der Desktop-App für ein Nutzungsfenster: Spur, darauf der verbrauchte
-// Anteil im Uhrzeigersinn ab 12 Uhr
-const RING = 12
-function svgRing(percent: number, color: string): string {
-  const stroke = 2.5
-  const r = (RING - stroke) / 2
-  const c = RING / 2
-  const length = 2 * Math.PI * r
-  const used = Math.round((Math.max(0, Math.min(100, percent)) / 100) * length * 10) / 10
-  const arc =
-    used <= 0
-      ? ''
-      : `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" ` +
-        `stroke-dasharray="${used} ${length}" transform="rotate(-90 ${c} ${c})"/>`
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${RING}" height="${RING}" viewBox="0 0 ${RING} ${RING}">` +
-    `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#808080" stroke-opacity="0.25" stroke-width="${stroke}"/>` +
-    `${arc}</svg>`
-  )
-}
-
 // Abrechnungsart aus den Nutzungsfenstern: nur das 5-Stunden- und das Wochenfenster
 // gibt es ausschließlich im Abo (ein Gateway meldet „spend_limit“, das zählt nicht).
 // Ist ein Fenster ausgeschöpft und läuft die Sitzung weiter, geht sie vermutlich über Zusatznutzung.
@@ -239,6 +218,10 @@ function windowFrom(rateLimits: readonly SessionRateLimit[], kind: string): Usag
   return { percent: limit.percentUsed, resetsAt: Number.isNaN(resetsAt) ? undefined : resetsAt }
 }
 
+// Balkenlänge der Nutzungsfenster: Pixel in der Desktop-App, Zellen im Terminal
+const LIMIT_BAR = 40
+const LIMIT_CELLS = 5
+
 // Die Nutzungsfenster der Fußzeile: Bezeichnung und ab welcher Restzeit die Zurücksetzung dasteht
 const WINDOWS = [
   { key: 'fiveHour', label: '5 h', showWithin: HOUR },
@@ -253,8 +236,8 @@ function windowView(window: UsageWindow, label: string, showWithin: number, now:
   const percent = isReset ? 0 : window.percent
   const tone: Tone = percent >= 90 ? 'error' : percent >= 70 ? 'warning' : 'success'
   const due = left !== undefined && !isReset && left <= showWithin ? ` (neu in ${formatSpan(left)})` : ''
-  const text = `${label} ${pct(percent).trim()}${due}`
-  return { percent, tone, text }
+  const value = `${pct(percent).trim()}${due}`
+  return { key: label, percent, tone, label, value, text: `${label} ${value}` }
 }
 
 async function refresh($: EngineInterface) {
@@ -590,7 +573,7 @@ export const register: Register = on => {
   on('command.run', { command: WARM_COMMAND }, async ($, e) => ({ text: await runWarmCommand($, e.args) }))
 
   // Fußzeile unter dem Eingabefeld, rechts bei den Modus-Angaben: 5-Stunden- und
-  // Wochenlimit. Im Terminal als weitere Modus-Angaben, in der Desktop-App mit kleinem Ring.
+  // Wochenlimit mit kurzem Balken. Vorhandene Modi bleiben davor stehen.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const current = await read($, info)
     if (current === null) return next(e)
@@ -600,19 +583,43 @@ export const register: Register = on => {
       return window === undefined ? [] : [windowView(window, w.label, w.showWithin, now)]
     })
     if (views.length === 0) return next(e)
-    if (e.surface !== 'desktop') {
-      return next({ ...e, props: { ...e.props, modes: [...e.props.modes, ...views.map(v => v.text)] } })
+
+    const { Box, Text } = $.ui.resolve(e)
+    const modes = e.props.modes.length === 0 ? null : <Text dimColor>{`${e.props.modes.join(' & ')} ·`}</Text>
+
+    if (e.surface === 'desktop') {
+      const { Svg } = $.ui.resolve(e)
+      return (
+        <Box flexDirection="row" alignItems="center" columnGap={1}>
+          {modes}
+          {views.map(v => (
+            <Box key={v.key} flexDirection="row" alignItems="center" columnGap={1}>
+              <Text dimColor>{v.label}</Text>
+              <Svg
+                source={svgBar(LIMIT_BAR, [{ from: 0, to: v.percent, color: TONE[v.tone] }])}
+                alt={`Nutzungslimit ${v.text}`}
+                width={LIMIT_BAR}
+                height={BAR_H}
+              />
+              <Text dimColor>{v.value}</Text>
+            </Box>
+          ))}
+        </Box>
+      )
     }
 
-    const { Box, Text, Svg } = $.ui.resolve(e)
+    // Terminal: Balken aus Blockzeichen, je Fenster ein Abschnitt
     return (
-      <Box flexDirection="row" alignItems="center" columnGap={1}>
-        {e.props.modes.length === 0 ? null : <Text dimColor>{`${e.props.modes.join(' & ')} ·`}</Text>}
+      <Box flexDirection="row" columnGap={1}>
+        {modes}
         {views.map(v => (
-          <Box flexDirection="row" alignItems="center" columnGap={1}>
-            <Svg source={svgRing(v.percent, TONE[v.tone])} alt={`Nutzungslimit ${v.text}`} width={RING} height={RING} />
-            <Text dimColor>{v.text}</Text>
-          </Box>
+          <Text key={v.key}>
+            <Text dimColor>{`${v.label} `}</Text>
+            {toRuns(cellsFrom(LIMIT_CELLS, [['fill', v.percent]]), glyphs).map(run =>
+              run.kind === 'empty' ? <Text dimColor>{run.text}</Text> : <Text color={v.tone}>{run.text}</Text>,
+            )}
+            <Text dimColor>{` ${v.value}`}</Text>
+          </Text>
         ))}
       </Box>
     )

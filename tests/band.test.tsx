@@ -533,12 +533,13 @@ const windows = (five?: [number, number], week?: [number, number]) => [
   ...(week === undefined ? [] : [{ kind: 'seven_day', percentUsed: week[0], resetsAt: at(week[1]) }]),
 ]
 
-// Fußzeile im Terminal als Text, mit den Modi, die Claude Code schon zeigt
+// Fußzeile im Terminal als Text, mit den Modi, die Claude Code schon zeigt; Einträge durch „ | “ getrennt
 async function footer($: Engine, modes: string[] = ['focus']) {
   const ui = await $.ui.mount({ ...FOOTER, surface: 'terminal', props: { modes } } as never)
-  const text = (await ui.find({ type: 'Text' }))?.text
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
   await ui.unmount()
-  return text
+  // Je Eintrag der äußere Text: die Modi und jedes Fenster mit Balken und Wert
+  return texts.filter(t => t === 'focus' || t.startsWith('focus ') || /^(5 h|Woche) .*%/.test(t)).join(' | ')
 }
 
 test('1: Band zeigt keine Nutzungsfenster', async ($, on) => {
@@ -562,7 +563,7 @@ test('2: Fußzeile im Terminal, Zurücksetzung noch weit weg', async ($, on) => 
   mock.env(on, {})
   engine(on, { ...USAGE, rateLimits: windows([23, 3 * H], [41, 4 * 24 * H]) })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(await footer($)).toBe('focus & 5 h 23 % & Woche 41 %')
+  expect(await footer($)).toBe('focus · | 5 h █░░░░ 23 % | Woche ██░░░ 41 %')
 })
 
 test('3: 5 h mit Zeitangabe erst in der letzten Stunde', async ($, on) => {
@@ -570,11 +571,11 @@ test('3: 5 h mit Zeitangabe erst in der letzten Stunde', async ($, on) => {
   mock.env(on, {})
   engine(on, { ...USAGE, rateLimits: windows([23, 61 * MIN], [41, 4 * 24 * H]) })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(await footer($)).toBe('focus & 5 h 23 % & Woche 41 %')
+  expect(await footer($)).toBe('focus · | 5 h █░░░░ 23 % | Woche ██░░░ 41 %')
   await clock.advance(MIN)
-  expect(await footer($)).toBe('focus & 5 h 23 % (neu in 1 h) & Woche 41 %')
+  expect(await footer($)).toBe('focus · | 5 h █░░░░ 23 % (neu in 1 h) | Woche ██░░░ 41 %')
   await clock.advance(MIN)
-  expect(await footer($)).toBe('focus & 5 h 23 % (neu in 59 min) & Woche 41 %')
+  expect(await footer($)).toBe('focus · | 5 h █░░░░ 23 % (neu in 59 min) | Woche ██░░░ 41 %')
 })
 
 test('4: Woche mit Zeitangabe erst in den letzten 12 Stunden', async ($, on) => {
@@ -582,24 +583,25 @@ test('4: Woche mit Zeitangabe erst in den letzten 12 Stunden', async ($, on) => 
   mock.env(on, {})
   engine(on, { ...USAGE, rateLimits: windows(undefined, [41, 12 * H + MIN]) })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(await footer($)).toBe('focus & Woche 41 %')
+  expect(await footer($)).toBe('focus · | Woche ██░░░ 41 %')
   await clock.advance(31 * MIN)
-  expect(await footer($)).toBe('focus & Woche 41 % (neu in 11 h 30 min)')
+  expect(await footer($)).toBe('focus · | Woche ██░░░ 41 % (neu in 11 h 30 min)')
 })
 
-test('5: Fußzeile in der Desktop-App mit kleinen Ringen', async ($, on) => {
+test('5: Fußzeile in der Desktop-App mit kurzen Balken', async ($, on) => {
   mock.clock(on, { now: NOW })
   mock.env(on, {})
   engine(on, { ...USAGE, rateLimits: windows([92, 3 * H], [75, 4 * 24 * H]) })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...FOOTER, surface: 'desktop', props: { modes: ['focus'] } } as never)
   expect((await ui.find({ type: 'Text', text: /^focus/ }))?.text).toBe('focus ·')
-  const rings = await ui.findAll({ type: 'Svg' })
-  expect(rings.map(r => r.props.width)).toEqual([12, 12])
-  // Ab 90 % rot, ab 70 % gelb
-  expect(String(rings[0]?.props.source)).toContain('stroke="#E5534B"')
-  expect(String(rings[1]?.props.source)).toContain('stroke="#E0A33A"')
-  expect((await ui.findAll({ type: 'Text', text: /%/ })).map(t => t.text)).toEqual(['5 h 92 %', 'Woche 75 %'])
+  const bars = await ui.findAll({ type: 'Svg' })
+  expect(bars.map(b => b.props.width)).toEqual([40, 40])
+  expect(bars.map(b => b.props.alt)).toEqual(['Nutzungslimit 5 h 92 %', 'Nutzungslimit Woche 75 %'])
+  // Ab 90 % rot, ab 70 % gelb; 92 % von 40 px sind 36,8 px
+  expect(String(bars[0]?.props.source)).toContain('width="36.8" height="6" fill="#E5534B"')
+  expect(String(bars[1]?.props.source)).toContain('fill="#E0A33A"')
+  expect((await ui.findAll({ type: 'Text' })).map(t => t.text)).toEqual(['focus ·', '5 h', '92 %', 'Woche', '75 %'])
   await ui.unmount()
 })
 
@@ -608,7 +610,7 @@ test('6: Nur ein gemeldetes Fenster', async ($, on) => {
   mock.env(on, {})
   engine(on, { ...USAGE, rateLimits: windows(undefined, [41, 4 * 24 * H]) })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(await footer($, [])).toBe('Woche 41 %')
+  expect(await footer($, [])).toBe('Woche ██░░░ 41 %')
 })
 
 test('7: Ohne Abo-Fenster bleibt die Fußzeile unverändert', async ($, on) => {
@@ -628,7 +630,7 @@ test('8: Nach der Zurücksetzung 0 % ohne Zusatz', async ($, on) => {
   mock.env(on, {})
   engine(on, { ...USAGE, rateLimits: windows([88, 30 * MIN], [41, 4 * 24 * H]) })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(await footer($)).toBe('focus & 5 h 88 % (neu in 30 min) & Woche 41 %')
+  expect(await footer($)).toBe('focus · | 5 h ████░ 88 % (neu in 30 min) | Woche ██░░░ 41 %')
   await clock.advance(31 * MIN)
-  expect(await footer($)).toBe('focus & 5 h 0 % & Woche 41 %')
+  expect(await footer($)).toBe('focus · | 5 h ░░░░░ 0 % | Woche ██░░░ 41 %')
 })
