@@ -87,8 +87,6 @@ function engine(on: On, usage: unknown = USAGE) {
   })
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
-    // Die Fußzeile zeichnet ihre Modus-Angaben wie Claude Code, verbunden mit „&“
-    if (e.component === 'SessionMode') return <Text>{(e.props as { modes: string[] }).modes.join(' & ')}</Text>
     return <Text>unten</Text>
   })
 }
@@ -125,7 +123,8 @@ test('Band zeigt Kontext, Auto-Compact und warmen Cache auf jeder Fläche', asyn
     } else {
       // Desktop: keine Blockzeichen, Balken als Grafik
       expect(await ui.find({ type: 'Text', text: /[█░┃]/ })).toBeUndefined()
-      const bars = await ui.findAll({ type: 'Svg' })
+      // Zwei Balken; die Ringe der Nutzungsfenster zählen nicht dazu
+      const bars = (await ui.findAll({ type: 'Svg' })).filter(b => !String(b.props.alt).startsWith('Nutzungslimits'))
       expect(bars.length).toBe(2)
       expect(bars[0]?.props.alt).toBe('Kontext 45 % belegt, Auto-Compact bei 84 %')
       expect(bars[0]?.props.width).toBe(180)
@@ -521,9 +520,8 @@ test('Anfrage auf kalten Cache: neu geschriebene Token zählen nicht als Treffer
   }
 })
 
-// ---- Nutzungsfenster in der Fußzeile ----------------------------------------
+// ---- Nutzungsfenster als Ringe im Band ---------------------------------------
 
-const FOOTER = { plugin: 'kontext-cache-band', component: 'SessionMode', requestId: 'session-mode' } as const
 const NOW = Date.parse('2026-10-29T10:00:00Z') // 29.10.2026, 11:00 in Wien
 const MIN = 60_000
 const H = 60 * MIN
@@ -533,106 +531,104 @@ const windows = (five?: [number, number], week?: [number, number]) => [
   ...(week === undefined ? [] : [{ kind: 'seven_day', percentUsed: week[0], resetsAt: at(week[1]) }]),
 ]
 
-// Fußzeile im Terminal als Text, mit den Modi, die Claude Code schon zeigt; Einträge durch „ | “ getrennt
-async function footer($: Engine, modes: string[] = ['focus']) {
-  const ui = await $.ui.mount({ ...FOOTER, surface: 'terminal', props: { modes } } as never)
-  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+// Der Ring der Nutzungsfenster in der Desktop-App: die Grafik mit Tooltip
+async function rings($: Engine) {
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const svg = (await ui.findAll({ type: 'Svg' })).find(s => String(s.props.alt).startsWith('Nutzungslimits'))
   await ui.unmount()
-  // Je Eintrag der äußere Text: die Modi und jedes Fenster mit Balken und Wert
-  return texts.filter(t => t === 'focus' || t.startsWith('focus ') || /^(5 h|Woche) .*%/.test(t)).join(' | ')
+  return svg
 }
+const titleOf = (svg: { props: Record<string, unknown> } | undefined) =>
+  /<title>([^<]*)<\/title>/.exec(String(svg?.props.source))?.[1]
 
-test('1: Band zeigt keine Nutzungsfenster', async ($, on) => {
-  mock.clock(on, { now: NOW })
-  mock.env(on, {})
-  engine(on, { ...USAGE, rateLimits: windows([23, 3 * H], [41, 4 * 24 * H]) })
+async function start($: Engine) {
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 } as never)) {
     // nur durchlaufen
   }
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...BAND, surface })
-    expect(await ui.find({ type: 'Text', text: /Woche|5 h|Limit/ })).toBeUndefined()
-    if (surface === 'desktop') expect((await ui.findAll({ type: 'Svg' })).length).toBe(2)
-    await ui.unmount()
-  }
-})
+}
 
-test('2: Fußzeile im Terminal, Zurücksetzung noch weit weg', async ($, on) => {
-  mock.clock(on, { now: NOW })
-  mock.env(on, {})
-  engine(on, { ...USAGE, rateLimits: windows([23, 3 * H], [41, 4 * 24 * H]) })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(await footer($)).toBe('focus · | 5 h █░░░░ 23 % | Woche ██░░░ 41 %')
-})
-
-test('3: 5 h mit Zeitangabe erst in der letzten Stunde', async ($, on) => {
-  const clock = mock.clock(on, { now: NOW })
-  mock.env(on, {})
-  engine(on, { ...USAGE, rateLimits: windows([23, 61 * MIN], [41, 4 * 24 * H]) })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(await footer($)).toBe('focus · | 5 h █░░░░ 23 % | Woche ██░░░ 41 %')
-  await clock.advance(MIN)
-  expect(await footer($)).toBe('focus · | 5 h █░░░░ 23 % (neu in 1 h) | Woche ██░░░ 41 %')
-  await clock.advance(MIN)
-  expect(await footer($)).toBe('focus · | 5 h █░░░░ 23 % (neu in 59 min) | Woche ██░░░ 41 %')
-})
-
-test('4: Woche mit Zeitangabe erst in den letzten 12 Stunden', async ($, on) => {
-  const clock = mock.clock(on, { now: NOW })
-  mock.env(on, {})
-  engine(on, { ...USAGE, rateLimits: windows(undefined, [41, 12 * H + MIN]) })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(await footer($)).toBe('focus · | Woche ██░░░ 41 %')
-  await clock.advance(31 * MIN)
-  expect(await footer($)).toBe('focus · | Woche ██░░░ 41 % (neu in 11 h 30 min)')
-})
-
-test('5: Fußzeile in der Desktop-App mit kurzen Balken', async ($, on) => {
+test('Ringe: rechts neben beiden Zeilen, ohne Zahlen, Werte im Tooltip', async ($, on) => {
   mock.clock(on, { now: NOW })
   mock.env(on, {})
   engine(on, { ...USAGE, rateLimits: windows([92, 3 * H], [75, 4 * 24 * H]) })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...FOOTER, surface: 'desktop', props: { modes: ['focus'] } } as never)
-  expect((await ui.find({ type: 'Text', text: /^focus/ }))?.text).toBe('focus ·')
-  const bars = await ui.findAll({ type: 'Svg' })
-  expect(bars.map(b => b.props.width)).toEqual([40, 40])
-  expect(bars.map(b => b.props.alt)).toEqual(['Nutzungslimit 5 h 92 %', 'Nutzungslimit Woche 75 %'])
-  // Ab 90 % rot, ab 70 % gelb; 92 % von 40 px sind 36,8 px
-  expect(String(bars[0]?.props.source)).toContain('width="36.8" height="6" fill="#E5534B"')
-  expect(String(bars[1]?.props.source)).toContain('fill="#E0A33A"')
-  expect((await ui.findAll({ type: 'Text' })).map(t => t.text)).toEqual(['focus ·', '5 h', '92 %', 'Woche', '75 %'])
+  await start($)
+  const svg = await rings($)
+  expect(svg?.props.width).toBe(36)
+  expect(svg?.props.height).toBe(36)
+  // Interaktiv gezeichnet, sonst gibt es keinen Tooltip
+  expect(svg?.props.isInteractive).toBe(true)
+  expect(titleOf(svg)).toBe('5-Stunden-Limit: 92 %\nWochenlimit: 75 %')
+  const source = String(svg?.props.source)
+  // Außen (r 16) die Woche gelb ab 70 %, innen (r 10) 5 h rot ab 90 %
+  expect(source).toMatch(/r="16" fill="none" stroke="#E0A33A"/)
+  expect(source).toMatch(/r="10" fill="none" stroke="#E5534B"/)
+  // Keine Zahlen neben den Ringen
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /Limit|Woche|92|75/ })).toBeUndefined()
   await ui.unmount()
 })
 
-test('6: Nur ein gemeldetes Fenster', async ($, on) => {
-  mock.clock(on, { now: NOW })
+test('Ringe: Zeit im Tooltip bei 5 h erst in der letzten Stunde', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
   mock.env(on, {})
-  engine(on, { ...USAGE, rateLimits: windows(undefined, [41, 4 * 24 * H]) })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(await footer($, [])).toBe('Woche ██░░░ 41 %')
+  engine(on, { ...USAGE, rateLimits: windows([23, 61 * MIN], [41, 4 * 24 * H]) })
+  await start($)
+  expect(titleOf(await rings($))).toBe('5-Stunden-Limit: 23 %\nWochenlimit: 41 %')
+  await clock.advance(MIN)
+  expect(titleOf(await rings($))).toBe('5-Stunden-Limit: 23 %, neu in 1 h\nWochenlimit: 41 %')
+  await clock.advance(MIN)
+  expect(titleOf(await rings($))).toBe('5-Stunden-Limit: 23 %, neu in 59 min\nWochenlimit: 41 %')
 })
 
-test('7: Ohne Abo-Fenster bleibt die Fußzeile unverändert', async ($, on) => {
-  mock.clock(on, { now: NOW })
+test('Ringe: Zeit im Tooltip bei der Woche erst in den letzten 12 Stunden', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
   mock.env(on, {})
-  engine(on, { ...USAGE, rateLimits: [] })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(await footer($)).toBe('focus')
-  const ui = await $.ui.mount({ ...FOOTER, surface: 'desktop', props: { modes: ['focus'] } } as never)
-  expect((await ui.find({ type: 'Text' }))?.text).toBe('focus')
-  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
-  await ui.unmount()
+  engine(on, { ...USAGE, rateLimits: windows([23, 3 * H], [41, 12 * H + MIN]) })
+  await start($)
+  expect(titleOf(await rings($))).toBe('5-Stunden-Limit: 23 %\nWochenlimit: 41 %')
+  await clock.advance(31 * MIN)
+  expect(titleOf(await rings($))).toBe('5-Stunden-Limit: 23 %\nWochenlimit: 41 %, neu in 11 h 30 min')
 })
 
-test('8: Nach der Zurücksetzung 0 % ohne Zusatz', async ($, on) => {
+test('Ringe: nach der Zurücksetzung 0 % ohne Zusatz', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, {})
   engine(on, { ...USAGE, rateLimits: windows([88, 30 * MIN], [41, 4 * 24 * H]) })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  expect(await footer($)).toBe('focus · | 5 h ████░ 88 % (neu in 30 min) | Woche ██░░░ 41 %')
+  await start($)
   await clock.advance(31 * MIN)
-  expect(await footer($)).toBe('focus · | 5 h ░░░░░ 0 % | Woche ██░░░ 41 %')
+  const svg = await rings($)
+  expect(titleOf(svg)).toBe('5-Stunden-Limit: 0 %\nWochenlimit: 41 %')
+  // Innerer Ring nur noch Spur, kein Bogen
+  expect(String(svg?.props.source)).not.toMatch(/r="10"[^>]*stroke-dasharray/)
+})
+
+test('Ringe: ein fehlendes Fenster steht im Tooltip als nicht gemeldet', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  mock.env(on, {})
+  engine(on, { ...USAGE, rateLimits: windows([23, 3 * H]) })
+  await start($)
+  const svg = await rings($)
+  expect(titleOf(svg)).toBe('5-Stunden-Limit: 23 %\nWochenlimit: nicht gemeldet')
+  expect(String(svg?.props.source)).not.toMatch(/r="16"[^>]*stroke-dasharray/)
+})
+
+test('Ringe: ohne Abo-Fenster keine Ringe', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  mock.env(on, {})
+  engine(on, { ...USAGE, rateLimits: [] })
+  await start($)
+  expect(await rings($)).toBeUndefined()
+})
+
+test('Ringe: das Terminal zeigt keine Nutzungsfenster', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  mock.env(on, {})
+  engine(on, { ...USAGE, rateLimits: windows([23, 3 * H], [41, 4 * 24 * H]) })
+  await start($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Limit|Woche|23 %|41 %/ })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('Prüfbefehl zeigt gemeldete und fehlende Fenster unverändert', async ($, on) => {

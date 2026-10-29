@@ -1,6 +1,6 @@
 {
   "name": "kontext-cache-band",
-  "version": "0.8.2",
-  "description": "Zeigt über dem Eingabefeld Kontextfüllstand, Cache-Füllstand mit Restzeit, die Auto-Compact-Schwelle und unter dem Eingabefeld die Nutzungslimits des Abos",
+  "version": "0.9.0",
+  "description": "Zeigt über dem Eingabefeld Kontextfüllstand, Cache-Füllstand mit Restzeit, die Auto-Compact-Schwelle und die Nutzungslimits des Abos als Ringe",
   "types": "./types/index.d.ts"
 }

@@ -218,26 +218,51 @@ function windowFrom(rateLimits: readonly SessionRateLimit[], kind: string): Usag
   return { percent: limit.percentUsed, resetsAt: Number.isNaN(resetsAt) ? undefined : resetsAt }
 }
 
-// Balkenlänge der Nutzungsfenster: Pixel in der Desktop-App, Zellen im Terminal
-const LIMIT_BAR = 40
-const LIMIT_CELLS = 5
-
-// Die Nutzungsfenster der Fußzeile: Bezeichnung und ab welcher Restzeit die Zurücksetzung dasteht
+// Die Nutzungsfenster des Abos: Bezeichnung im Tooltip und ab welcher Restzeit
+// die Zurücksetzung dasteht. Das erste ist der innere Ring, das zweite der äußere.
 const WINDOWS = [
-  { key: 'fiveHour', label: '5 h', showWithin: HOUR },
-  { key: 'sevenDay', label: 'Woche', showWithin: 12 * HOUR },
+  { key: 'fiveHour', label: '5-Stunden-Limit', showWithin: HOUR },
+  { key: 'sevenDay', label: 'Wochenlimit', showWithin: 12 * HOUR },
 ] as const
 
-// Was die Fußzeile zu einem Fenster zeigt. Ist die gemeldete Zurücksetzung vorbei, gilt
+type WindowView = { percent: number; tone: Tone; text: string } | { percent: undefined; tone: Tone; text: string }
+
+// Was die Ringe zu einem Fenster zeigen. Ist die gemeldete Zurücksetzung vorbei, gilt
 // der alte Stand nicht mehr: 0 %, bis die nächste Anfrage den neuen bringt.
-function windowView(window: UsageWindow, label: string, showWithin: number, now: number) {
+function windowView(window: UsageWindow | undefined, label: string, showWithin: number, now: number): WindowView {
+  if (window === undefined) return { percent: undefined, tone: 'subtle', text: `${label}: nicht gemeldet` }
   const left = window.resetsAt === undefined ? undefined : window.resetsAt - now
   const isReset = left !== undefined && left <= 0
   const percent = isReset ? 0 : window.percent
   const tone: Tone = percent >= 90 ? 'error' : percent >= 70 ? 'warning' : 'success'
-  const due = left !== undefined && !isReset && left <= showWithin ? ` (neu in ${formatSpan(left)})` : ''
-  const value = `${pct(percent).trim()}${due}`
-  return { key: label, percent, tone, label, value, text: `${label} ${value}` }
+  const due = left !== undefined && !isReset && left <= showWithin ? `, neu in ${formatSpan(left)}` : ''
+  return { percent, tone, text: `${label}: ${pct(percent).trim()}${due}` }
+}
+
+// Zwei Ringe ineinander, innen das 5-Stunden-, außen das Wochenfenster, ohne Zahlen.
+// Der Tooltip (title) nennt die Werte; er braucht eine interaktiv gezeichnete Grafik.
+const RINGS = 36
+function svgRings(inner: WindowView, outer: WindowView, title: string): string {
+  const stroke = 4
+  const c = RINGS / 2
+  const ring = (r: number, view: WindowView) => {
+    const length = 2 * Math.PI * r
+    const used = view.percent === undefined ? 0 : Math.round((Math.max(0, Math.min(100, view.percent)) / 100) * length * 10) / 10
+    const track = `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#808080" stroke-opacity="0.25" stroke-width="${stroke}"/>`
+    const arc =
+      used <= 0
+        ? ''
+        : `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${TONE[view.tone]}" stroke-width="${stroke}" ` +
+          `stroke-dasharray="${used} ${length}" transform="rotate(-90 ${c} ${c})"/>`
+    return track + arc
+  }
+  const outerR = (RINGS - stroke) / 2
+  const innerR = outerR - stroke - 2
+  const escaped = title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${RINGS}" height="${RINGS}" viewBox="0 0 ${RINGS} ${RINGS}">` +
+    `<title>${escaped}</title>${ring(outerR, outer)}${ring(innerR, inner)}</svg>`
+  )
 }
 
 async function refresh($: EngineInterface) {
@@ -616,59 +641,6 @@ export const register: Register = on => {
   on('command.run', { command: WARM_COMMAND }, async ($, e) => ({ text: await runWarmCommand($, e.args) }))
   on('command.run', { command: LIMITS_COMMAND }, async $ => ({ text: await runLimitsCommand($) }))
 
-  // Fußzeile unter dem Eingabefeld, rechts bei den Modus-Angaben: 5-Stunden- und
-  // Wochenlimit mit kurzem Balken. Vorhandene Modi bleiben davor stehen.
-  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    const current = await read($, info)
-    if (current === null) return next(e)
-    const now = await $.clock.now()
-    const views = WINDOWS.flatMap(w => {
-      const window = current[w.key]
-      return window === undefined ? [] : [windowView(window, w.label, w.showWithin, now)]
-    })
-    if (views.length === 0) return next(e)
-
-    const { Box, Text } = $.ui.resolve(e)
-    const modes = e.props.modes.length === 0 ? null : <Text dimColor>{`${e.props.modes.join(' & ')} ·`}</Text>
-
-    if (e.surface === 'desktop') {
-      const { Svg } = $.ui.resolve(e)
-      return (
-        <Box flexDirection="row" alignItems="center" columnGap={1}>
-          {modes}
-          {views.map(v => (
-            <Box key={v.key} flexDirection="row" alignItems="center" columnGap={1}>
-              <Text dimColor>{v.label}</Text>
-              <Svg
-                source={svgBar(LIMIT_BAR, [{ from: 0, to: v.percent, color: TONE[v.tone] }])}
-                alt={`Nutzungslimit ${v.text}`}
-                width={LIMIT_BAR}
-                height={BAR_H}
-              />
-              <Text dimColor>{v.value}</Text>
-            </Box>
-          ))}
-        </Box>
-      )
-    }
-
-    // Terminal: Balken aus Blockzeichen, je Fenster ein Abschnitt
-    return (
-      <Box flexDirection="row" columnGap={1}>
-        {modes}
-        {views.map(v => (
-          <Text key={v.key}>
-            <Text dimColor>{`${v.label} `}</Text>
-            {toRuns(cellsFrom(LIMIT_CELLS, [['fill', v.percent]]), glyphs).map(run =>
-              run.kind === 'empty' ? <Text dimColor>{run.text}</Text> : <Text color={v.tone}>{run.text}</Text>,
-            )}
-            <Text dimColor>{` ${v.value}`}</Text>
-          </Text>
-        ))}
-      </Box>
-    )
-  })
-
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
 
@@ -864,17 +836,40 @@ export const register: Register = on => {
         )
       const cacheRight = cache.kind === 'bar' ? <Text dimColor>{cache.ttl}</Text> : null
 
+      // Rechts neben beiden Zeilen: die Nutzungsfenster als Ringe, Werte im Tooltip.
+      // Ohne gemeldetes Fenster (kein Abo) keine Ringe.
+      const [innerView, outerView] = WINDOWS.map(w => windowView(current[w.key], w.label, w.showWithin, now)) as [
+        WindowView,
+        WindowView,
+      ]
+      const limitsTitle = `${innerView.text}\n${outerView.text}`
+      const rings =
+        innerView.percent === undefined && outerView.percent === undefined ? null : (
+          <Svg
+            source={svgRings(innerView, outerView, limitsTitle)}
+            alt={`Nutzungslimits: ${innerView.text}; ${outerView.text}`}
+            width={RINGS}
+            height={RINGS}
+            isInteractive
+          />
+        )
+
       return (
         <Box flexDirection="column" rowGap={0}>
-          {row(
-            'Kontext',
-            contextSvg,
-            contextAlt,
-            <Text tabular>{contextPctText}</Text>,
-            <Text tabular>{contextLeft}</Text>,
-            <Text dimColor>{contextRight}</Text>,
-          )}
-          {row('Cache', cacheSvg, cacheAlt, cachePctCell, cacheLeft, cacheRight)}
+          <Box flexDirection="row" alignItems="center" columnGap={3}>
+            <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+              {row(
+                'Kontext',
+                contextSvg,
+                contextAlt,
+                <Text tabular>{contextPctText}</Text>,
+                <Text tabular>{contextLeft}</Text>,
+                <Text dimColor>{contextRight}</Text>,
+              )}
+              {row('Cache', cacheSvg, cacheAlt, cachePctCell, cacheLeft, cacheRight)}
+            </Box>
+            {rings}
+          </Box>
           {warmState === null ? null : (
             <Box flexDirection="row" alignItems="center">
               {/* Ohne Bezeichnung, unter den Balken eingerückt */}
