@@ -253,6 +253,40 @@ async function refresh($: EngineInterface) {
 // Lebensdauer ohne Aufpreis neu. Das Gespräch selbst bleibt unverändert.
 
 const WARM_COMMAND = 'cache-keep-warm'
+
+// ---- /kontext-cache-band-limits ------------------------------------------
+//
+// Prüfbefehl: gibt die Nutzungsfenster unverändert aus, wie Claude Code sie in diesem
+// Moment meldet, dazu was der Mod zuletzt gespeichert hat. Ohne Aufbereitung,
+// damit sichtbar wird, ob ein Fenster fehlt oder nur nicht gezeichnet wird.
+const LIMITS_COMMAND = 'kontext-cache-band-limits'
+
+async function runLimitsCommand($: EngineInterface): Promise<string> {
+  const now = await $.clock.now()
+  const usage = await $.session.usage({ breakdown: 'summary' })
+  const stored = await read($, info)
+  const lines = [`Abfragezeitpunkt (UTC): ${new Date(now).toISOString()}`, '']
+  lines.push(`Von Claude Code gemeldet (rateLimits, Anzahl ${usage.rateLimits.length}):`)
+  if (usage.rateLimits.length === 0) {
+    lines.push('  keine. Laut Doku: nur mit Pro/Max-Abo oder Gateway mit Ausgabenlimit und erst nach der ersten Antwort der Sitzung.')
+  }
+  for (const r of usage.rateLimits) lines.push(`  ${JSON.stringify(r)}`)
+  for (const kind of ['five_hour', 'seven_day']) {
+    if (!usage.rateLimits.some(r => r.kind === kind)) lines.push(`  ${kind}: nicht gemeldet`)
+  }
+  lines.push('', 'Vom Mod zuletzt gespeichert (Grundlage der Fußzeile):')
+  for (const [name, w] of [
+    ['fiveHour', stored?.fiveHour],
+    ['sevenDay', stored?.sevenDay],
+  ] as const) {
+    lines.push(
+      w === undefined
+        ? `  ${name}: nichts`
+        : `  ${name}: ${w.percent} %, Zurücksetzung ${w.resetsAt === undefined ? 'nicht gemeldet' : new Date(w.resetsAt).toISOString()}`,
+    )
+  }
+  return lines.join('\n')
+}
 const WARM_DEFAULT = HOUR
 const WARM_MAX = 24 * HOUR
 const WARM_RETRY = 30_000
@@ -393,6 +427,15 @@ export const register: Register = on => {
         name: WARM_COMMAND,
         description: 'Hält den Prompt-Cache für ein Zeitfenster warm',
         argumentHint: '[Dauer, z. B. 2h | stop]',
+        immediate: true,
+      })
+    } catch {
+      // Ohne Befehl läuft die Anzeige weiter
+    }
+    try {
+      await $.command.register({
+        name: LIMITS_COMMAND,
+        description: 'Zeigt die Nutzungsfenster, wie Claude Code sie gerade meldet (Prüfung)',
         immediate: true,
       })
     } catch {
@@ -571,6 +614,7 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: WARM_COMMAND }, async ($, e) => ({ text: await runWarmCommand($, e.args) }))
+  on('command.run', { command: LIMITS_COMMAND }, async $ => ({ text: await runLimitsCommand($) }))
 
   // Fußzeile unter dem Eingabefeld, rechts bei den Modus-Angaben: 5-Stunden- und
   // Wochenlimit mit kurzem Balken. Vorhandene Modi bleiben davor stehen.

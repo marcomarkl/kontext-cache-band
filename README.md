@@ -12,6 +12,8 @@ Cache    ████████████████████  58:30  95
 
 Unter dem Eingabefeld, rechts in der Fußzeile bei den Modus-Angaben, stehen die Nutzungsfenster des Abos: `5 h █░░░░ 23 %  Woche ██░░░ 41 %`, je mit einem kurzen Balken (in der Desktop-App als Grafik, im Terminal aus Blockzeichen). Grün, ab 70 % gelb, ab 90 % rot. Wann ein Fenster zurückgesetzt wird, steht nur kurz davor in Klammern: beim 5-Stunden-Fenster in der letzten Stunde, bei der Woche in den letzten 12 Stunden, etwa `5 h 88 % (neu in 30 min)`. Nach der Zurücksetzung steht 0 %, bis die nächste Anfrage den neuen Stand bringt. Ohne Abo (API-Schlüssel, Gateway) bleibt die Fußzeile unverändert.
 
+Zur Prüfung gibt `/kontext-cache-band-limits` die Nutzungsfenster unverändert aus, wie Claude Code sie gerade meldet, und daneben, was der Mod zuletzt gespeichert hat. Laut Claude-Code-Doku kann jedes Fenster unabhängig vom anderen fehlen, und ein Fenster fällt weg, sobald seine Zurücksetzung vorbei ist.
+
 Die drei vorderen Spalten haben feste Breiten, damit die Balken übereinander stehen. Im Terminal sind die Balken aus Blockzeichen; die Desktop-App zeichnet mit Proportionalschrift, dort sind es abgerundete Grafik-Balken (Marke als senkrechter Strich). Unter 90 Zeichen Breite werden die Balken kürzer, die Einzelheiten brechen um.
 
 ## Cache warm halten: `/cache-keep-warm`

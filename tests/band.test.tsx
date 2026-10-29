@@ -634,3 +634,35 @@ test('8: Nach der Zurücksetzung 0 % ohne Zusatz', async ($, on) => {
   await clock.advance(31 * MIN)
   expect(await footer($)).toBe('focus · | 5 h ░░░░░ 0 % | Woche ██░░░ 41 %')
 })
+
+test('Prüfbefehl zeigt gemeldete und fehlende Fenster unverändert', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  mock.env(on, {})
+  engine(on, { ...USAGE, rateLimits: windows([23, 3 * H]) })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const result = (await $.command.run({ command: 'kontext-cache-band-limits', args: '' } as never)) as { text: string }
+  expect(result.text).toBe(
+    [
+      'Abfragezeitpunkt (UTC): 2026-10-29T10:00:00.000Z',
+      '',
+      'Von Claude Code gemeldet (rateLimits, Anzahl 1):',
+      '  {"kind":"five_hour","percentUsed":23,"resetsAt":"2026-10-29T13:00:00.000Z"}',
+      '  seven_day: nicht gemeldet',
+      '',
+      'Vom Mod zuletzt gespeichert (Grundlage der Fußzeile):',
+      '  fiveHour: 23 %, Zurücksetzung 2026-10-29T13:00:00.000Z',
+      '  sevenDay: nichts',
+    ].join('\n'),
+  )
+})
+
+test('Prüfbefehl ohne Abo-Fenster', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  mock.env(on, {})
+  engine(on, { ...USAGE, rateLimits: [] })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const result = (await $.command.run({ command: 'kontext-cache-band-limits', args: '' } as never)) as { text: string }
+  expect(result.text).toContain('rateLimits, Anzahl 0')
+  expect(result.text).toContain('  five_hour: nicht gemeldet\n  seven_day: nicht gemeldet')
+  expect(result.text).toContain('  fiveHour: nichts\n  sevenDay: nichts')
+})
