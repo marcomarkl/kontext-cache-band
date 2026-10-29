@@ -106,7 +106,7 @@ test('Band zeigt Kontext, Auto-Compact und warmen Cache auf jeder Fläche', asyn
     const ui = await $.ui.mount({ ...BAND, surface })
     // Einzelheiten: Token links, Auto-Compact rechtsbündig
     expect((await ui.find({ type: 'Text', text: /von 200k/ }))?.text).toBe('90k von 200k')
-    expect((await ui.find({ type: 'Text', text: /^Auto-Compact/ }))?.text).toBe('Auto-Compact bei 167k (84 %), noch 77k')
+    expect((await ui.find({ type: 'Text', text: /^Auto-Compact/ }))?.text).toBe('Auto-Compact: 84 %')
     expect((await ui.find({ type: 'Text', text: /^45 %$/ }))?.text).toBe('45 %')
     // Cache: Restzeit in der Spalte neben dem Balken, Trefferquote nur aus gelesenen Token, abgerundet (85k von 90k sind 94,4 %, also 94 %)
     expect((await ui.find({ type: 'Text', text: /^58:30$/ }))?.text).toBe('58:30')
@@ -176,7 +176,8 @@ test('Kalter Cache mit 5-Minuten-TTL aus der Umgebung', async ($, on) => {
   expect(bar).not.toContain('fill="#4CB05A"')
   expect(bar).not.toContain('fill="#8A8A8A"')
   expect((await ui.find({ type: 'Text', text: /^TTL/ }))?.text).toContain('TTL 5 min')
-  expect((await ui.find({ type: 'Text', text: /^Auto-Compact/ }))?.text).toContain('Override 70 %')
+  // Auch mit gesetztem Override nur die Prozentzahl
+  expect((await ui.find({ type: 'Text', text: /^Auto-Compact/ }))?.text).toBe('Auto-Compact: 84 %')
   await ui.unmount()
 })
 
@@ -205,7 +206,7 @@ test('Fehlt die Aufschlüsselung, steht Auto-Compact auf unbekannt statt aus', a
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await ui.find({ type: 'Text', text: /von 200k/ }))?.text).toBe('90k von 200k')
-  expect((await ui.find({ type: 'Text', text: /^Auto-Compact/ }))?.text).toBe('Auto-Compact unbekannt')
+  expect((await ui.find({ type: 'Text', text: /^Auto-Compact/ }))?.text).toBe('Auto-Compact: unbekannt')
   await ui.unmount()
 })
 
@@ -255,7 +256,7 @@ test('Kontext ohne gemessene Antwort zeigt Claude Codes Schätzung', async ($, o
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await ui.find({ type: 'Text', text: /von 200k/ }))?.text).toBe('≈12k von 200k (geschätzt)')
-  expect((await ui.find({ type: 'Text', text: /^Auto-Compact/ }))?.text).toBe('Auto-Compact bei 167k (84 %), noch 155k')
+  expect((await ui.find({ type: 'Text', text: /^Auto-Compact/ }))?.text).toBe('Auto-Compact: 84 %')
   expect((await ui.find({ type: 'Text', text: /≈6 %/ }))?.text).toBe('≈6 %')
   await ui.unmount()
 })

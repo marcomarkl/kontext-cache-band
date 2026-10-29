@@ -674,19 +674,14 @@ export const register: Register = on => {
       contextLeft = `${isEstimated ? '≈' : ''}${formatTokens(current.tokens)} von ${formatTokens(current.window)}`
       if (isEstimated) contextLeft += ' (geschätzt)'
     }
+    // Rechts nur die Schwelle in Prozent des Kontextfensters
     let contextRight: string
     if (current.isAutoCompactOn === undefined) {
-      contextRight = 'Auto-Compact unbekannt'
+      contextRight = 'Auto-Compact: unbekannt'
     } else if (autoPercent === undefined || current.autoCompactAt === undefined) {
-      contextRight = 'Auto-Compact aus'
+      contextRight = 'Auto-Compact: aus'
     } else {
-      contextRight = `Auto-Compact bei ${formatTokens(current.autoCompactAt)} (${Math.round(autoPercent)} %)`
-      if (current.tokens !== undefined && current.tokens < current.autoCompactAt) {
-        contextRight += `, noch ${formatTokens(current.autoCompactAt - current.tokens)}`
-      }
-    }
-    if (current.autoCompactOverride !== undefined) {
-      contextRight += ` · Override ${current.autoCompactOverride} %`
+      contextRight = `Auto-Compact: ${Math.round(autoPercent)} %`
     }
 
     // Zeile 2: Cache. Der Balken ist die Restzeit bis zum Ablauf (voll direkt nach einer
