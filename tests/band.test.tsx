@@ -56,12 +56,15 @@ const FORK_OK = {
 }
 let forkAnswer: unknown = FORK_OK
 let forks = 0
+// Verbrauch der Hauptanfragen; ein Test setzt ihn um, etwa für einen kalten Cache
+let stepUsage: unknown = STEP_RESULT.usage
 const toasts: string[] = []
 
 // Was unter dem Mod steht: Claude Code und andere Mods, hier eine Zeile „unten“
 function engine(on: On, usage: unknown = USAGE) {
   forkAnswer = FORK_OK
   forks = 0
+  stepUsage = STEP_RESULT.usage
   toasts.length = 0
   on('model.fork', () => {
     forks += 1
@@ -80,7 +83,7 @@ function engine(on: On, usage: unknown = USAGE) {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.end', () => ({ sessionId: 's' }) as never)
   on('turn.step', async function* (_, e) {
-    return { ...STEP_RESULT, turnId: e.turnId, index: e.index } as never
+    return { ...STEP_RESULT, usage: stepUsage, turnId: e.turnId, index: e.index } as never
   })
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -105,9 +108,9 @@ test('Band zeigt Kontext, Auto-Compact und warmen Cache auf jeder Fläche', asyn
     expect((await ui.find({ type: 'Text', text: /von 200k/ }))?.text).toBe('90k von 200k')
     expect((await ui.find({ type: 'Text', text: /^Auto-Compact/ }))?.text).toBe('Auto-Compact bei 167k (84 %), noch 77k')
     expect((await ui.find({ type: 'Text', text: /^45 %$/ }))?.text).toBe('45 %')
-    // Cache: Restzeit in der Spalte neben dem Balken, Trefferquote abgerundet (98,9 % sind 98 %)
+    // Cache: Restzeit in der Spalte neben dem Balken, Trefferquote nur aus gelesenen Token, abgerundet (85k von 90k sind 94,4 %, also 94 %)
     expect((await ui.find({ type: 'Text', text: /^58:30$/ }))?.text).toBe('58:30')
-    expect((await ui.find({ type: 'Text', text: /gelesen/ }))?.text).toBe('98 % Treffer · 89k (85k gelesen, 4k neu)')
+    expect((await ui.find({ type: 'Text', text: /gelesen/ }))?.text).toBe('94 % Treffer · 89k (85k gelesen, 4k neu)')
     expect((await ui.find({ type: 'Text', text: /^TTL/ }))?.text).toBe('TTL 1h, Abo-Standard')
     // Je Zeile ein Einzelheiten-Block mit links und rechts verteilten Teilen
     const spread = (await ui.findAll({ type: 'Box' })).filter(b => b.props.justifyContent === 'space-between')
@@ -166,7 +169,7 @@ test('Kalter Cache mit 5-Minuten-TTL aus der Umgebung', async ($, on) => {
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await ui.find({ type: 'Text', text: /^kalt$/ }))?.props.color).toBe('error')
-  expect((await ui.find({ type: 'Text', text: /gelesen/ }))?.text).toBe('seit 2 min · 98 % Treffer · 89k (85k gelesen, 4k neu)')
+  expect((await ui.find({ type: 'Text', text: /gelesen/ }))?.text).toBe('seit 2 min · zuletzt 94 % Treffer · 89k (85k gelesen, 4k neu)')
   // Kalter Cache: leerer Balken, nur die Spur
   const bar = String((await ui.findAll({ type: 'Svg' }))[1]?.props.source)
   expect(bar).not.toContain('fill="#4CB05A"')
@@ -291,7 +294,7 @@ test('Fortgesetztes Gespräch: Cache-Stand aus Claude Codes Angaben geschätzt',
   })
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /fortgesetzten/ }))?.text).toBe('≈100 % Treffer · ≈70k aus dem fortgesetzten Gespräch')
+  expect((await ui.find({ type: 'Text', text: /fortgesetzten/ }))?.text).toBe('≈70k aus dem fortgesetzten Gespräch')
   expect((await ui.find({ type: 'Text', text: /^≈40:00$/ }))?.text).toBe('≈40:00')
   expect((await ui.find({ type: 'Text', text: /^TTL/ }))?.text).toBe('TTL 1h, von Claude Code gemeldet')
   await ui.unmount()
@@ -496,4 +499,22 @@ test('Warm halten: /clear beendet es', async ($, on) => {
   await runWarm($, '2h')
   await $.session.end({ reason: 'clear' } as never)
   expect((await runWarm($, 'stop')).text).toBe('Cache warm halten läuft nicht.')
+})
+
+test('Anfrage auf kalten Cache: neu geschriebene Token zählen nicht als Treffer', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  mock.env(on, {})
+  engine(on)
+  stepUsage = { input_tokens: 1_000, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 89_000, model: 'm' }
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'm', messageCount: 1 } as never)) {
+    // nur durchlaufen
+  }
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    expect((await ui.find({ type: 'Text', text: /gelesen/ }))?.text).toBe('0 % Treffer · 89k (0 gelesen, 89k neu)')
+    await ui.unmount()
+  }
 })

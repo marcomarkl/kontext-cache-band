@@ -4,11 +4,11 @@ Claude-Code-Mod, der im Band über dem Eingabefeld zwei gleich aufgebaute Zeilen
 
 ```
 Kontext  █████████░░░░░░░┃░░░   45 %  90k von 200k              Auto-Compact bei 167k (84 %), noch 77k
-Cache    ████████████████████  58:30  98 % Treffer · 89k (85k gelesen, 4k neu)      TTL 1h, Abo-Standard
+Cache    ████████████████████  58:30  95 % Treffer · 89k (85k gelesen, 4k neu)      TTL 1h, Abo-Standard
 ```
 
 - **Kontext**: Füllstand des Kontextfensters (Werte der letzten Antwort, wie die Statuszeile sie hat). Die Marke `┃` im Balken ist die Auto-Compact-Schwelle. Der Balken ist grün, gelb ab 5 Punkten vor der Schwelle und rot ab 90 %. Dahinter die Token, rechtsbündig Schwelle und Abstand zur Schwelle, oder „Auto-Compact aus“; ein gesetztes `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` steht am Ende.
-- **Cache**: Der Balken ist die Restzeit bis zum Ablauf des Caches: voll direkt nach einer Anfrage, er leert sich über die Lebensdauer (1 Stunde oder 5 Minuten). Grün, in der letzten Minute gelb; abgelaufen ist er leer, daneben steht rot „kalt“ und wie lange schon. Dahinter die Trefferquote der letzten Anfrage (Anteil des Prompts aus dem Cache, abgerundet) und die Token, rechtsbündig die Lebensdauer und ihre Quelle. Die Trefferquote liegt in einem laufenden Gespräch fast immer bei 99 bis 100 %, weil jede Anfrage den ganzen bisherigen Verlauf aus dem Cache liest; deshalb zeigt der Balken die Restzeit, die sich tatsächlich ändert.
+- **Cache**: Der Balken ist die Restzeit bis zum Ablauf des Caches: voll direkt nach einer Anfrage, er leert sich über die Lebensdauer (1 Stunde oder 5 Minuten). Grün, in der letzten Minute gelb; abgelaufen ist er leer, daneben steht rot „kalt“ und wie lange schon. Dahinter die Trefferquote der letzten Anfrage und die Token, rechtsbündig die Lebensdauer und ihre Quelle. Als Treffer zählen nur die aus dem Cache gelesenen Token, abgerundet; neu in den Cache geschriebene Token sind keine Treffer. Eine Anfrage auf kalten Cache zeigt deshalb 0 % (oder nahe 0 %). Ist der Cache abgelaufen, steht „zuletzt“ davor, weil die Quote nur für die letzte Anfrage gilt. Bei einem fortgesetzten Gespräch ist sie unbekannt und fehlt, bis die erste Anfrage gelaufen ist. In einem laufenden Gespräch ist die Quote meist hoch, weil jede Anfrage den bisherigen Verlauf aus dem Cache liest; deshalb zeigt der Balken die Restzeit, die sich tatsächlich ändert.
 
 Die drei vorderen Spalten haben feste Breiten, damit die Balken übereinander stehen. Im Terminal sind die Balken aus Blockzeichen; die Desktop-App zeichnet mit Proportionalschrift, dort sind es abgerundete Grafik-Balken (Marke als senkrechter Strich). Unter 90 Zeichen Breite werden die Balken kürzer, die Einzelheiten brechen um.
 

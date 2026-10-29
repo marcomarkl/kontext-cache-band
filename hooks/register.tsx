@@ -606,15 +606,20 @@ export const register: Register = on => {
       const total = cached + request.input
       const remaining = request.at + request.ttlMs - now
       const isEstimate = request.isEstimate === true
+      const isWarm = remaining > 0
       const ttlLabel = request.ttlMs >= HOUR ? '1h' : '5 min'
+      // Treffer sind nur die aus dem Cache gelesenen Token. Neu geschriebene sind ein
+      // Fehlschlag, sonst stünde nach kaltem Cache (alles neu geschrieben) „100 % Treffer“.
+      // Abgerundet: 99,7 % sind noch nicht 100 %. Bei einer Schätzung (fortgesetztes
+      // Gespräch) ist die Quote unbekannt; nach Ablauf gilt sie nur für die letzte Anfrage.
+      const hitPct = Math.floor((request.read / total) * 100)
       cache = {
         kind: 'bar',
         left: Math.max(0, Math.min(100, (remaining / request.ttlMs) * 100)),
-        isWarm: remaining > 0,
+        isWarm,
         remaining,
         isEstimate,
-        // Abgerundet: 99,7 % sind noch nicht 100 %
-        hit: `${isEstimate ? '≈' : ''}${Math.floor((cached / total) * 100)} % Treffer`,
+        hit: isEstimate ? '' : `${isWarm ? '' : 'zuletzt '}${hitPct} % Treffer · `,
         tokens: isEstimate
           ? `≈${formatTokens(cached)} aus dem fortgesetzten Gespräch`
           : `${formatTokens(cached)} (${formatTokens(request.read)} gelesen, ${formatTokens(request.write)} neu)`,
@@ -715,7 +720,7 @@ export const register: Register = on => {
         ) : (
           <Text>
             {cache.isWarm ? '' : `seit ${formatMinutes(-cache.remaining)} · `}
-            {cache.hit} · {cache.tokens}
+            {cache.hit}{cache.tokens}
           </Text>
         )
       const cacheRight = cache.kind === 'bar' ? <Text dimColor>{cache.ttl}</Text> : null
@@ -786,7 +791,7 @@ export const register: Register = on => {
       cacheLeft = (
         <Text>
           {cache.isWarm ? '' : `seit ${formatMinutes(-cache.remaining)} · `}
-          {cache.hit} · {cache.tokens}
+          {cache.hit}{cache.tokens}
         </Text>
       )
       cacheRight = <Text dimColor>{cache.ttl}</Text>
