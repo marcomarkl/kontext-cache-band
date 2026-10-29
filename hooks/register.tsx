@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit, SessionUsage } from 'claude-code'
 
-import type { LastRequest, SessionInfo, WarmState } from '../types'
+import type { LastRequest, SessionInfo, UsageWindow, WarmState } from '../types'
 
 // Die Form-Kennung sorgt dafür, dass Werte einer älteren Version nach dem
 // Aktualisieren als leer gelesen werden statt als falsch geformte Daten
@@ -117,6 +117,27 @@ function svgBar(
   )
 }
 
+// Kleiner Ring der Desktop-App für ein Nutzungsfenster: Spur, darauf der verbrauchte
+// Anteil im Uhrzeigersinn ab 12 Uhr
+const RING = 12
+function svgRing(percent: number, color: string): string {
+  const stroke = 2.5
+  const r = (RING - stroke) / 2
+  const c = RING / 2
+  const length = 2 * Math.PI * r
+  const used = Math.round((Math.max(0, Math.min(100, percent)) / 100) * length * 10) / 10
+  const arc =
+    used <= 0
+      ? ''
+      : `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" ` +
+        `stroke-dasharray="${used} ${length}" transform="rotate(-90 ${c} ${c})"/>`
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${RING}" height="${RING}" viewBox="0 0 ${RING} ${RING}">` +
+    `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="#808080" stroke-opacity="0.25" stroke-width="${stroke}"/>` +
+    `${arc}</svg>`
+  )
+}
+
 // Abrechnungsart aus den Nutzungsfenstern: nur das 5-Stunden- und das Wochenfenster
 // gibt es ausschließlich im Abo (ein Gateway meldet „spend_limit“, das zählt nicht).
 // Ist ein Fenster ausgeschöpft und läuft die Sitzung weiter, geht sie vermutlich über Zusatznutzung.
@@ -204,8 +225,36 @@ async function storeInfo($: EngineInterface, usage: SessionUsage) {
     autoCompactAt: breakdown?.autoCompactThreshold,
     autoCompactOverride: config.autoCompactOverride,
     isCachingOff: config.isCachingOff,
+    fiveHour: windowFrom(usage.rateLimits, 'five_hour'),
+    sevenDay: windowFrom(usage.rateLimits, 'seven_day'),
   }
   await update($, info, () => next)
+}
+
+// Ein Nutzungsfenster aus den gemeldeten; ein unlesbarer Zeitpunkt fällt weg
+function windowFrom(rateLimits: readonly SessionRateLimit[], kind: string): UsageWindow | undefined {
+  const limit = rateLimits.find(r => r.kind === kind)
+  if (limit === undefined) return undefined
+  const resetsAt = limit.resetsAt === undefined ? NaN : Date.parse(limit.resetsAt)
+  return { percent: limit.percentUsed, resetsAt: Number.isNaN(resetsAt) ? undefined : resetsAt }
+}
+
+// Die Nutzungsfenster der Fußzeile: Bezeichnung und ab welcher Restzeit die Zurücksetzung dasteht
+const WINDOWS = [
+  { key: 'fiveHour', label: '5 h', showWithin: HOUR },
+  { key: 'sevenDay', label: 'Woche', showWithin: 12 * HOUR },
+] as const
+
+// Was die Fußzeile zu einem Fenster zeigt. Ist die gemeldete Zurücksetzung vorbei, gilt
+// der alte Stand nicht mehr: 0 %, bis die nächste Anfrage den neuen bringt.
+function windowView(window: UsageWindow, label: string, showWithin: number, now: number) {
+  const left = window.resetsAt === undefined ? undefined : window.resetsAt - now
+  const isReset = left !== undefined && left <= 0
+  const percent = isReset ? 0 : window.percent
+  const tone: Tone = percent >= 90 ? 'error' : percent >= 70 ? 'warning' : 'success'
+  const due = left !== undefined && !isReset && left <= showWithin ? ` (neu in ${formatSpan(left)})` : ''
+  const text = `${label} ${pct(percent).trim()}${due}`
+  return { percent, tone, text }
 }
 
 async function refresh($: EngineInterface) {
@@ -370,10 +419,20 @@ export const register: Register = on => {
     // Solange der Cache warm ist, jede Sekunde neu zeichnen (Countdown),
     // danach nur noch einmal pro Minute (Anzeige „kalt seit … min“)
     let drawnMinute = -1
+    let drawnClockMinute = -1
     $.clock.every(1000, () => {
       void warmTick($).catch(() => undefined)
       void (async () => {
         try {
+          // Die Zeitangaben der Nutzungsfenster in der Fußzeile gehen nach der Uhr
+          const current = await read($, info)
+          if (current?.fiveHour !== undefined || current?.sevenDay !== undefined) {
+            const clockMinute = Math.floor((await $.clock.now()) / MINUTE)
+            if (clockMinute !== drawnClockMinute) {
+              drawnClockMinute = clockMinute
+              $.ui.invalidate('ui.render')
+            }
+          }
           const request = await read($, last)
           if (request === null) return
           const sinceExpiry = (await $.clock.now()) - (request.at + request.ttlMs)
@@ -529,6 +588,35 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: WARM_COMMAND }, async ($, e) => ({ text: await runWarmCommand($, e.args) }))
+
+  // Fußzeile unter dem Eingabefeld, rechts bei den Modus-Angaben: 5-Stunden- und
+  // Wochenlimit. Im Terminal als weitere Modus-Angaben, in der Desktop-App mit kleinem Ring.
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    const current = await read($, info)
+    if (current === null) return next(e)
+    const now = await $.clock.now()
+    const views = WINDOWS.flatMap(w => {
+      const window = current[w.key]
+      return window === undefined ? [] : [windowView(window, w.label, w.showWithin, now)]
+    })
+    if (views.length === 0) return next(e)
+    if (e.surface !== 'desktop') {
+      return next({ ...e, props: { ...e.props, modes: [...e.props.modes, ...views.map(v => v.text)] } })
+    }
+
+    const { Box, Text, Svg } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="row" alignItems="center" columnGap={1}>
+        {e.props.modes.length === 0 ? null : <Text dimColor>{`${e.props.modes.join(' & ')} ·`}</Text>}
+        {views.map(v => (
+          <Box flexDirection="row" alignItems="center" columnGap={1}>
+            <Svg source={svgRing(v.percent, TONE[v.tone])} alt={`Nutzungslimit ${v.text}`} width={RING} height={RING} />
+            <Text dimColor>{v.text}</Text>
+          </Box>
+        ))}
+      </Box>
+    )
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)

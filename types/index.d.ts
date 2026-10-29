@@ -34,6 +34,18 @@ export type SessionInfo = {
   autoCompactOverride?: string
   /** Ob Prompt-Caching abgeschaltet ist. */
   isCachingOff: boolean
+  /** 5-Stunden-Fenster des Abos; fehlt ohne Abo oder solange Claude Code es nicht gemeldet hat. */
+  fiveHour?: UsageWindow
+  /** 7-Tage-Fenster des Abos; fehlt ohne Abo oder solange Claude Code es nicht gemeldet hat. */
+  sevenDay?: UsageWindow
+}
+
+/** Stand eines Nutzungsfensters des Abos, wie Claude Code es meldet. */
+export type UsageWindow = {
+  /** Verbrauchter Anteil, 0 bis 100. */
+  percent: number
+  /** Zurücksetzung, in Millisekunden seit der Epoche; fehlt, wenn nicht gemeldet. */
+  resetsAt?: number
 }
 
 /** Die Cache-Lebensdauer, wie Claude Code selbst sie zuletzt gemeldet hat. */
